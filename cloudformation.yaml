@@ -1,0 +1,240 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation template for the Twitter Trending Topics Detection System using AWS services."
+
+Parameters:
+  S3BucketName:
+    Type: String
+    Default: "twitter-trending-data-bucket"
+    Description: "Name of the S3 bucket for storing data"
+
+  KinesisStreamName:
+    Type: String
+    Default: "TwitterKinesisStream"
+    Description: "Name of the Kinesis Data Stream"
+
+  EMRClusterName:
+    Type: String
+    Default: "twitter-emr-cluster"
+    Description: "Name of the EMR cluster"
+
+Resources:
+  S3RawDataBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+
+  S3ProcessedDataBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "${S3BucketName}-processed"
+      VersioningConfiguration:
+        Status: Enabled
+
+  S3GlacierArchive:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "${S3BucketName}-archive"
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: GLACIER
+
+  IAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+                - "elasticmapreduce.amazonaws.com"
+                - "sagemaker.amazonaws.com"
+                - "kinesis.amazonaws.com"
+                - "lakeformation.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "GeneralAccessPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:*"
+                  - "logs:*"
+                  - "glue:*"
+                  - "lakeformation:*"
+                  - "redshift:*"
+                  - "emr:*"
+                  - "sagemaker:*"
+                  - "kinesis:*"
+                  - "states:*"
+                  - "ec2:*"
+                  - "kms:*"
+                  - "iam:PassRole"
+                Resource: "*"
+
+  KinesisDataStream:
+    Type: "AWS::Kinesis::Stream"
+    Properties:
+      Name: !Ref KinesisStreamName
+      ShardCount: 1
+
+  KinesisFirehose:
+    Type: "AWS::KinesisFirehose::DeliveryStream"
+    Properties:
+      DeliveryStreamName: "TwitterKinesisFirehose"
+      S3DestinationConfiguration:
+        BucketARN: !GetAtt S3RawDataBucket.Arn
+        RoleARN: !GetAtt IAMRole.Arn
+        BufferingHints:
+          IntervalInSeconds: 300
+          SizeInMBs: 5
+
+  GlueDatabase:
+    Type: "AWS::Glue::Database"
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput:
+        Name: "twitter_trending_db"
+
+  GlueCrawler:
+    Type: "AWS::Glue::Crawler"
+    Properties:
+      Role: !GetAtt IAMRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${S3BucketName}/"
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+
+  GlueSecurityConfiguration:
+    Type: "AWS::Glue::SecurityConfiguration"
+    Properties:
+      Name: "GlueSecurityConfig"
+      EncryptionConfiguration:
+        S3Encryption:
+          - S3EncryptionMode: SSE-S3
+
+  GlueETLJob:
+    Type: "AWS::Glue::Job"
+    Properties:
+      Name: "TwitterTrendingGlueJob"
+      Role: !GetAtt IAMRole.Arn
+      Command:
+        Name: "glueetl"
+        ScriptLocation: !Sub "s3://${S3BucketName}/scripts/glue-etl-job.py"
+      DefaultArguments:
+        "--TempDir": !Sub "s3://${S3BucketName}/temp/"
+        "--job-language": "python"
+      GlueVersion: "2.0"
+      WorkerType: "G.1X"
+      NumberOfWorkers: 2
+      SecurityConfiguration: !Ref GlueSecurityConfiguration
+
+  GlueDataBrewProject:
+    Type: "AWS::Glue::DataBrew::Project"
+    Properties:
+      Name: "TwitterDataBrewProject"
+      RoleArn: !GetAtt IAMRole.Arn
+      DatasetName: "TwitterDataset"
+
+  LakeFormationPermissions:
+    Type: "AWS::LakeFormation::Permissions"
+    Properties:
+      DataLakePrincipal:
+        DataLakePrincipalIdentifier: !GetAtt IAMRole.Arn
+      Resource:
+        DatabaseResource:
+          Name: !Ref GlueDatabase
+      Permissions:
+        - "ALL"
+
+  RedshiftCluster:
+    Type: "AWS::Redshift::Cluster"
+    Properties:
+      ClusterIdentifier: "twitter-trending-cluster"
+      DBName: "twitterdb"
+      MasterUsername: "admin"
+      MasterUserPassword: "Admin12345"
+      NodeType: "dc2.large"
+      ClusterType: "multi-node"
+      NumberOfNodes: 2
+      IamRoles:
+        - !GetAtt IAMRole.Arn
+
+  SageMakerModelTraining:
+    Type: "AWS::SageMaker::TrainingJob"
+    Properties:
+      TrainingJobName: "TwitterTrendingModelTraining"
+      RoleArn: !GetAtt IAMRole.Arn
+      AlgorithmSpecification:
+        TrainingImage: "382416733822.dkr.ecr.us-east-1.amazonaws.com/linear-learner:latest"
+        TrainingInputMode: "File"
+      ResourceConfig:
+        InstanceType: "ml.m4.xlarge"
+        InstanceCount: 1
+        VolumeSizeInGB: 5
+      InputDataConfig:
+        - ChannelName: "training"
+          DataSource:
+            S3DataSource:
+              S3DataType: "S3Prefix"
+              S3Uri: !Sub "s3://${S3BucketName}/processed/"
+              S3DataDistributionType: "FullyReplicated"
+      OutputDataConfig:
+        S3OutputPath: !Sub "s3://${S3BucketName}/output/"
+
+  # Step Functions for Orchestration
+  StepFunctionsStateMachine:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      RoleArn: !GetAtt IAMRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "State machine to orchestrate Twitter Trending Processing",
+          "StartAt": "GlueETLJob",
+          "States": {
+            "GlueETLJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "TwitterTrendingGlueJob"
+              },
+              "Next": "EMRProcessing"
+            },
+            "EMRProcessing": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+              "Parameters": {
+                "ClusterId": "j-123456789",
+                "Step": {
+                  "Name": "SparkJobStep",
+                  "ActionOnFailure": "CONTINUE",
+                  "HadoopJarStep": {
+                    "Jar": "command-runner.jar",
+                    "Args": ["spark-submit", "--deploy-mode", "cluster", "s3://${S3BucketName}/scripts/spark-job.py"]
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+
+Outputs:
+  S3Bucket:
+    Description: "Name of the S3 bucket for storing data"
+    Value: !Ref S3RawDataBucket
+
+  KinesisStreamArn:
+    Description: "ARN of the Kinesis Data Stream"
+    Value: !Ref KinesisDataStream

@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spark-container
+    environment:
+      - USE_MINIO=true  # Use MinIO for input/output files
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_SERVER=http://minio:9000
+      - MINIO_BUCKET=data  # Default MinIO bucket
+      - PYSPARK_PYTHON=/usr/bin/python3  # Use Python 3 in the container
+      - PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+      - PYTHONPATH=/home/sparkuser/app
+    depends_on:
+      - minio
+    volumes:
+      - ./app:/home/sparkuser/app
+      - ./data:/home/sparkuser/data
+      - ./output:/home/sparkuser/output
+    ports:
+      - "4040:4040"
+      - "8080:8080"
+      - "7077:7077"
+      - "6066:6066"
+    command: ["/bin/bash", "-c", "tail -f /dev/null"]
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: streamlit-container
+    environment:
+      - PYTHONPATH=/home/streamlituser/app
+    volumes:
+      - ./app:/home/streamlituser/app
+      - ./output:/home/streamlituser/output  # Access the Spark job's output
+    ports:
+      - "8501:8501"
+    command: ["streamlit", "run", "/home/streamlituser/app/dashboard.py"]
+
+volumes:
+  minio-data:

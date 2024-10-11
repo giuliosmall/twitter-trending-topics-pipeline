@@ -1,0 +1,4 @@
+spacy
+nltk
+stop-words
+pytest
