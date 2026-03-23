@@ -27,6 +27,48 @@ A `burst_score` of 3.0 means the term was mentioned 3x more than its average acr
 
 ## How It Works
 
+```mermaid
+graph TD
+    A[Raw Tweet JSON] --> B[Load & Extract Fields]
+    B --> C[Parse Timestamps & Date Filter]
+    C --> D[Text Cleaning]
+
+    D --> |"Strip URLs, HTML entities,<br/>mentions, special chars"| E[spaCy POS Tagging]
+
+    E --> F{POS Filter}
+    F --> |NOUN, PROPN| G[Frequency Filter]
+    F --> |VERB, ADJ, ADV,<br/>PRON, etc.| X1[Discard]
+
+    G --> |"rank >= 700<br/>(specific nouns)"| H[Noise Filter]
+    G --> |"rank < 700<br/>(generic: people, time)"| X2[Discard]
+
+    H --> |Clean tokens| I[Extract Hashtags]
+    H --> |"lt3, rt, lol, hahaha"| X3[Discard]
+
+    I --> J[Topical Tokens]
+
+    J --> K[Bigram Generation]
+    J --> L[Unigrams]
+    K --> M[Union All Terms]
+    L --> M
+
+    M --> N[Group by Hourly Window + Term]
+    N --> O[Compute Burst Score]
+    O --> |"burst = count / avg_count"| P[Min Count Filter]
+    P --> Q[Rank by Burst Score per Window]
+    Q --> R[Top N Trending Topics]
+
+    R --> S[CSV Output / Streamlit Dashboard]
+
+    style X1 fill:#fee,stroke:#c00
+    style X2 fill:#fee,stroke:#c00
+    style X3 fill:#fee,stroke:#c00
+    style R fill:#dfd,stroke:#090
+    style S fill:#dfd,stroke:#090
+```
+
+### Pipeline Steps
+
 1. **Text cleaning** — Strips URLs, HTML entities, mentions, special characters. Preserves hashtags.
 2. **POS-based token extraction** — spaCy tags each token; only `NOUN`, `PROPN`, and hashtags are kept. Verbs, adjectives, adverbs, pronouns are automatically filtered in any language.
 3. **Frequency filtering** — Nouns ranked among the top 700 most common words in the spaCy vocabulary are dropped (e.g. "people", "time", "uur"). Prevents generic words from dominating results.
