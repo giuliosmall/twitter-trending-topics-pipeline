@@ -6,6 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: spark-container
+    hostname: spark-container
     environment:
       - USE_MINIO=true  # Use MinIO for input/output files
       - MINIO_ACCESS_KEY=minioadmin
@@ -15,6 +16,7 @@ services:
       - PYSPARK_PYTHON=/usr/bin/python3  # Use Python 3 in the container
       - PYSPARK_DRIVER_PYTHON=/usr/bin/python3
       - PYTHONPATH=/home/sparkuser/app
+      - SPARK_LOCAL_HOSTNAME=localhost
     depends_on:
       - minio
     volumes:
@@ -23,7 +25,7 @@ services:
       - ./output:/home/sparkuser/output
     ports:
       - "4040:4040"
-      - "8080:8080"
+      - "8180:8080"
       - "7077:7077"
       - "6066:6066"
     command: ["/bin/bash", "-c", "tail -f /dev/null"]
