@@ -31,6 +31,14 @@ run-python:
 test:
 	docker exec -it $(DOCKER_CONTAINER) bash -c "cd $(SPARK_APP_DIR) && pytest test_main.py"
 
+# Lint with ruff
+lint:
+	ruff check app/
+
+# Format with ruff
+format:
+	ruff format app/
+
 # Clean up output files
 clean:
 	rm -rf output/
