@@ -1,0 +1,12 @@
+.git
+.gitignore
+.idea
+__pycache__
+*.pyc
+output/
+*.md
+*.yaml
+!docker-compose.yml
+architecture.py
+nlp_pipeline.py
+pyproject.toml
